@@ -109,10 +109,10 @@ namespace esphome {
 				// that protects a still-live bond from being evicted by a
 				// stray pairing just because the real peer is briefly
 				// unreachable (off/rebooting). But it also means a bond that
-				// went stale WITHOUT a clean reason=0x213 disconnect (e.g. the
-				// peer forgot/unpaired us while we were powered off) has no
-				// automatic way back to discoverability. Only a human has the
-				// missing context (genuinely gone vs. just asleep) to make
+				// went stale (e.g. the peer forgot/unpaired us while we were
+				// powered off) has no automatic way back to discoverability.
+				// Only a human has the missing context (genuinely gone vs. just
+				// asleep) to make
 				// that call safely, so this exposes it as an explicit action
 				// instead of guessing from elapsed time. Reconstructed from
 				// (and matches) the pre-bisection esp-idf design's own manual

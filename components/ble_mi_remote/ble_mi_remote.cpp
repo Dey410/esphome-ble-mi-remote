@@ -826,13 +826,9 @@ namespace esphome {
 				return;
 			}
 
-			if (reason == BLE_HS_ERR_HCI_BASE + BLE_ERR_REM_USER_CONN_TERM) {
-				bool deleteOk = NimBLEDevice::deleteBond(connInfo.getAddress());
-				ESP_LOGI(TAG, "Disconnected: peer deliberately terminated the link (reason=0x%02x), deleteBond(%s)=%s - plain advertising only", reason, connInfo.getAddress().toString().c_str(), deleteOk ? "OK" : "FAILED");
-				this->startPlainAdvertising();
-				return;
-			}
-
+			// Peer-initiated disconnects are normal while the TV or its Bluetooth
+			// service restarts. Preserve the bond and reconnect for every reason;
+			// plainAdvertStart() is the explicit path for clearing stale bonds.
 			this->startReconnectAdvert();
 		}
 

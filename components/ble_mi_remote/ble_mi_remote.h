@@ -176,9 +176,11 @@ namespace esphome {
 				// own-commits bisection stage 3/5
 				bool				_should_readvertise{true};
 				uint64_t			_target_mac = 0;
+				uint8_t				_target_addr_type = BLE_ADDR_PUBLIC;
 				bool				_has_target_mac = false;
 				bool				_target_mac_from_config = false;
 				ESPPreferenceObject	_target_mac_pref;
+				ESPPreferenceObject	_target_addr_type_pref;
 				// own-commits bisection stage 4/5
 				uint32_t			_reconnect_retry_until_ms = 0;
 				// own-commits bisection: powerAdvert*
@@ -215,6 +217,7 @@ namespace esphome {
 				// callback (and a reason code to onDisconnect) - [Breaking]
 				// Update callbacks to use NimBLEConnInfo (ba79a1b).
 				virtual void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override;
+				virtual void onAuthenticationComplete(NimBLEConnInfo& connInfo) override;
 				virtual void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
 				virtual void onWrite(NimBLECharacteristic* me, NimBLEConnInfo& connInfo) override;
 		};

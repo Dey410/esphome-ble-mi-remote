@@ -152,7 +152,33 @@ namespace esphome {
 			// own-commits bisection stage 3/5
 			this->loadTargetMac();
 
-			NimBLEDevice::init (deviceName);
+			bool nimble_ok = NimBLEDevice::init(deviceName);
+			ESP_LOGI(TAG, "NimBLE init: %s", nimble_ok ? "OK" : "FAILED");
+
+#ifdef CONFIG_BT_NIMBLE_NVS_PERSIST
+			ESP_LOGI(TAG, "CONFIG_BT_NIMBLE_NVS_PERSIST = ENABLED");
+#else
+			ESP_LOGE(TAG, "CONFIG_BT_NIMBLE_NVS_PERSIST = DISABLED");
+#endif
+
+#ifdef CONFIG_BT_NIMBLE_SECURITY_ENABLE
+			ESP_LOGI(TAG, "CONFIG_BT_NIMBLE_SECURITY_ENABLE = ENABLED");
+#else
+			ESP_LOGE(TAG, "CONFIG_BT_NIMBLE_SECURITY_ENABLE = DISABLED");
+#endif
+
+			if (!nimble_ok) {
+				this->mark_failed();
+				return;
+			}
+
+			int bond_count = NimBLEDevice::getNumBonds();
+			ESP_LOGI(TAG, "BLE bonds restored after boot: %d", bond_count);
+			for (int i = 0; i < bond_count; i++) {
+				NimBLEAddress bonded = NimBLEDevice::getBondedAddress(i);
+				ESP_LOGI(TAG, "Bond[%d]: %s, type=%u", i, bonded.toString().c_str(), bonded.getType());
+			}
+
 			// Real bug, found 2026-09-03: this used to redeclare pServer as
 			// a local ("NimBLEServer *pServer = ..."), which shadows the
 			// class member of the same name for the rest of setup() - the
@@ -512,7 +538,7 @@ namespace esphome {
 				return;
 			}
 
-			NimBLEAddress targetAddress(_target_mac, BLE_ADDR_PUBLIC);
+			NimBLEAddress targetAddress(_target_mac, _target_addr_type);
 			NimBLEClient* pClient = NimBLEDevice::createClient(targetAddress);
 			pClient->setSelfDelete(true, true);
 			pClient->setConnectTimeout(3000);
@@ -667,10 +693,9 @@ namespace esphome {
 				int rc = 0;
 				bool startOk = NimBLEDevice::startSecurity(connInfo.getConnHandle(), &rc);
 				ESP_LOGI(TAG, "onConnect: not bonded, requesting security: startSecurity()=%s rc=%d", startOk ? "OK" : "FAILED", rc);
+			} else {
+				this->learnTargetMac(connInfo.getIdAddress());
 			}
-
-			// own-commits bisection stage 3/5
-			this->learnTargetMac(connInfo.getAddress());
 
 			// Feature 2026-09-04: fire a command that was queued while
 			// disconnected (see queuePendingCommand()) now that we're
@@ -699,23 +724,43 @@ namespace esphome {
 			release();
 		}
 
+		void BleMiRemote::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
+			if (!connInfo.isBonded()) {
+				ESP_LOGW(TAG, "onAuthenticationComplete: peer is not bonded; target identity not saved");
+				return;
+			}
+
+			NimBLEAddress identity = connInfo.getIdAddress();
+			ESP_LOGI(TAG, "onAuthenticationComplete: bonded identity=%s, type=%u", identity.toString().c_str(), identity.getType());
+			this->learnTargetMac(identity);
+		}
+
 		// own-commits bisection stage 3/5: ported from esp-idf branch
 		// (loadTargetMac/learnTargetMac/startPlainAdvertising/startReconnectAdvert),
 		// minus the HD-burst call in startReconnectAdvert (stage 4) - falls back
 		// to plain advertising even when bonded, for now.
 		void BleMiRemote::loadTargetMac() {
 			this->_target_mac_pref = global_preferences->make_preference<uint64_t>(fnv1_hash("ble_mi_remote_target_mac"));
+			this->_target_addr_type_pref = global_preferences->make_preference<uint8_t>(fnv1_hash("ble_mi_remote_target_addr_type"));
 
 			if (this->_target_mac_from_config) {
-				ESP_LOGI(TAG, "loadTargetMac: using target_mac_address from config: %s", NimBLEAddress(this->_target_mac, BLE_ADDR_PUBLIC).toString().c_str());
+				NimBLEAddress configured(this->_target_mac, this->_target_addr_type);
+				ESP_LOGI(TAG, "loadTargetMac: using target_mac_address from config: %s, type=%u", configured.toString().c_str(), configured.getType());
 				return;
 			}
 
 			uint64_t stored = 0;
 			if (this->_target_mac_pref.load(&stored) && stored != 0) {
+				uint8_t stored_type = BLE_ADDR_PUBLIC;
+				if (!this->_target_addr_type_pref.load(&stored_type)) {
+					ESP_LOGW(TAG, "loadTargetMac: no saved address type; treating legacy target as PUBLIC until the next bonded connection");
+				}
+
 				this->_target_mac = stored;
+				this->_target_addr_type = stored_type;
 				this->_has_target_mac = true;
-				ESP_LOGI(TAG, "loadTargetMac: loaded learned target %s from flash", NimBLEAddress(stored, BLE_ADDR_PUBLIC).toString().c_str());
+				NimBLEAddress restored(this->_target_mac, this->_target_addr_type);
+				ESP_LOGI(TAG, "loadTargetMac: loaded learned target %s from flash, type=%u", restored.toString().c_str(), restored.getType());
 			} else {
 				ESP_LOGI(TAG, "loadTargetMac: no target_mac_address configured and nothing learned yet");
 			}
@@ -727,15 +772,18 @@ namespace esphome {
 			}
 
 			uint64_t mac = (uint64_t) addr;
-			if (mac == 0 || mac == this->_target_mac) {
+			uint8_t addr_type = addr.getType();
+			if (mac == 0 || (mac == this->_target_mac && addr_type == this->_target_addr_type)) {
 				return;
 			}
 
 			this->_target_mac = mac;
+			this->_target_addr_type = addr_type;
 			this->_has_target_mac = true;
 
-			bool ok = this->_target_mac_pref.save(&mac);
-			ESP_LOGI(TAG, "learnTargetMac: learned peer %s, saved to flash=%s", addr.toString().c_str(), ok ? "OK" : "FAILED");
+			bool mac_ok = this->_target_mac_pref.save(&mac);
+			bool type_ok = this->_target_addr_type_pref.save(&addr_type);
+			ESP_LOGI(TAG, "learnTargetMac: learned peer %s, type=%u, save_mac=%s, save_type=%s", addr.toString().c_str(), addr_type, mac_ok ? "OK" : "FAILED", type_ok ? "OK" : "FAILED");
 		}
 
 		void BleMiRemote::startPlainAdvertising() {
@@ -758,7 +806,7 @@ namespace esphome {
 				return;
 			}
 
-			NimBLEAddress dirAddr(this->_target_mac, BLE_ADDR_PUBLIC);
+			NimBLEAddress dirAddr(this->_target_mac, this->_target_addr_type);
 			if (!NimBLEDevice::isBonded(dirAddr)) {
 				ESP_LOGI(TAG, "startReconnectAdvert: no saved bond for %s, falling back to plain advertising", dirAddr.toString().c_str());
 				this->startPlainAdvertising();
@@ -772,7 +820,7 @@ namespace esphome {
 
 		void BleMiRemote::fireDirectedBurst() {
 			NimBLEAdvertising *adv = pServer->getAdvertising();
-			NimBLEAddress dirAddr(this->_target_mac, BLE_ADDR_PUBLIC);
+			NimBLEAddress dirAddr(this->_target_mac, this->_target_addr_type);
 			adv->setConnectableMode(BLE_GAP_CONN_MODE_DIR);
 			adv->setHighDutyCycleDirected(true);
 			bool stopOk = adv->stop();

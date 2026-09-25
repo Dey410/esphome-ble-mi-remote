@@ -79,9 +79,17 @@ async def to_code(config: dict) -> None:
     # the bt/nimble component to be part of the build at all.
     add_idf_sdkconfig_option("CONFIG_BT_ENABLED", True)
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ENABLED", True)
-    # own-commits bisection stage 1/5: sdkconfig only, no code changes yet.
+
+    # Bond persistence is implemented by NimBLE's Security Manager.
+    add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_SECURITY_ENABLE", True)
+
+    # The HID remote is a peripheral; connect_wake also acts as a central.
+    add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ROLE_PERIPHERAL", True)
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ROLE_CENTRAL", True)
+
+    # Keep pairing keys across ESP32 reboots and retain a small bond table.
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_NVS_PERSIST", True)
+    add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_MAX_BONDS", 3)
 
     var = cg.new_Pvariable(
         config[CONF_ID],
